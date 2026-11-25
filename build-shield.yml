@@ -1,0 +1,77 @@
+name: Build NerdyShield APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      palette:
+        description: Colour direction for the app
+        type: choice
+        default: blue
+        options:
+          - blue
+          - teal
+          - ink
+
+permissions:
+  contents: write
+
+env:
+  OFFICIAL_SIGNER_SHA256: a454b87a1847a89ed7f5e70fba6bba96f3ef29c26e0981204fe347bf231dfd5b
+  APKTOOL_VERSION: 2.9.3
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Unpack project and find the base APK
+        run: |
+          if [ -d tools ]; then SRC=.; else rm -rf _src; mkdir _src; unzip -q -o NerdyShield-src.zip -d _src; SRC=_src; fi
+          for f in raghu.jpg raghu.jpeg raghu.png raghu.webp; do [ -f "$f" ] && cp "$f" "$SRC/" || true; done
+          echo "SRC=$SRC" >> "$GITHUB_ENV"
+          PARTS=$(ls Orbot*part[0-9]* base/Orbot*part[0-9]* 2>/dev/null | sort || true)
+          if [ -n "$PARTS" ]; then cat $PARTS > base.apk; else cp "$(ls Orbot*.apk | head -1)" base.apk; fi
+          ls -l base.apk
+          sha256sum base.apk
+
+      - name: Tools
+        run: |
+          pip install lxml pillow
+          curl -fL -o apktool.jar "https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          BT=$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)
+          echo "BT=$BT" >> "$GITHUB_ENV"
+
+      - name: SAFETY GATE - base APK must carry the original developer signature
+        run: |
+          OUT=$("$BT/apksigner" verify --print-certs base.apk)
+          GOT=$(echo "$OUT" | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}' | tr 'A-F' 'a-f')
+          if [ "$GOT" != "$OFFICIAL_SIGNER_SHA256" ]; then
+            echo "::error::Base APK is NOT signed by the expected original key ($GOT). Refusing."
+            exit 1
+          fi
+
+      - name: Rebrand to NerdyShield
+        env:
+          NS_PALETTE: ${{ inputs.palette || 'blue' }}
+        run: python "$SRC/tools/rebrand.py" base.apk apktool.jar out/NerdyShield.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NerdyShield-apk
+          path: out/NerdyShield.apk
+
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NerdyShield (latest build)
+          body: NerdyShield 1.0. Uninstall any older copy of the app first (different signing key).
+          files: out/NerdyShield.apk
+          make_latest: true
