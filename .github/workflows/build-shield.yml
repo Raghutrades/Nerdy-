@@ -67,6 +67,11 @@ jobs:
           name: NerdyShield-apk
           path: out/NerdyShield.apk
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dump
+          path: out/ui-dump.zip
+
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
